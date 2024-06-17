@@ -1,0 +1,250 @@
+local tycoon = script.Parent.Parent
+
+local MarketplaceService = game:GetService("MarketplaceService")
+
+local mainItems = tycoon:FindFirstChild("MainItems")
+local values = tycoon:FindFirstChild("Values")
+
+local buttons = tycoon:FindFirstChild("Buttons")
+local purchasedItems = tycoon:FindFirstChild("Purchaseditems")
+local audio = tycoon:FindFirstChild("Audio")
+
+local debounce = false
+
+local objects = {}
+
+--Animation
+local tweenService = game:GetService("TweenService")
+
+local random = Random.new()
+
+local BUILDING_ANIMATION_POSITION_OFFSET_AMOUNT = 2
+local BUILDING_ANIMATION_PART_DELAY = 0.03
+
+function hasProperty(instance, property)
+	assert(typeof(instance) == "Instance")
+	assert(typeof(property) == "string")
+	
+	local hasProperty = false
+	
+	pcall(function()
+		local v = instance[property]
+		hasProperty = true
+	end)
+	
+	return hasProperty
+end
+--Part of Button Animation
+function instanceListToPropertyDict(instances, propertyList)
+	assert(typeof(instances) == "table")
+	assert(typeof(propertyList) == "table")
+
+  --[[Given a list of instances and a list of properties, construct a dictionary like so:
+  dict = {
+      [instance1] = {property1 = instance1.property1, property2 = instance1.property2, ...},
+      [instance2] = {property1 = instance2.property1, property2 = instance2.property2, ...},
+      ...
+  }]]
+	local dict = {}
+
+	for _, instance in ipairs(instances) do
+		local dictEntry = {}
+
+		for _, property in pairs(propertyList) do
+			assert(hasProperty(instance, property), string.format(
+				[[Instance '%s' (a %s) doesn't have property '%s'.]], 
+				tostring(instance), instance.ClassName, property)
+			)
+			dictEntry[property] = instance[property]
+		end
+
+		dict[instance] = dictEntry
+	end
+
+	return dict
+end
+
+function getDescendantsWhichAre(ancestor, className)
+	assert(typeof(ancestor) == "Instance")
+	assert(typeof(className) == "string")
+
+	--[[Returns all descendants of ancestor which are of class className or a class that inherits from className]]
+	local descendants = {}
+
+	for _, descendant in pairs(ancestor:GetDescendants()) do
+		if descendant:IsA(className) then
+			table.insert(descendants, descendant)
+		end
+	end
+
+	return descendants
+end
+
+function animateBuildingIn(buildingModel, tweenInfo)
+	assert(typeof(buildingModel) == "Instance" and buildingModel.ClassName == "Model", string.format(
+		"Invalid argument #1 to 'animateBuildingIn' (Model expected, got %s)", 
+		typeof(buildingModel) == "Instance" and buildingModel.ClassName or typeof(buildingModel)
+		))
+	assert(typeof(tweenInfo) == "TweenInfo", string.format(
+		"Invalid argument #1 to 'animateBuildingIn' (TweenInfo expected, got %s)",
+		typeof(tweenInfo)
+		))
+
+	--Collect BaseParts and original properties
+	local parts = getDescendantsWhichAre(buildingModel, "BasePart")
+	local originalProperties = instanceListToPropertyDict(parts, {"Transparency", "CFrame", "Color", "Size"})
+	local originalBasePartCFrame = buildingModel.PrimaryPart.CFrame
+
+	--Make parts invisible and randomly move them
+	for _, part in pairs(parts) do
+		part.Transparency = 1
+		part.Color = Color3.fromRGB(255, 255, 255)
+		part.Size = Vector3.new()
+
+		local positionOffset = Vector3.new(random:NextNumber(-1, 1), random:NextNumber(-0.25, 1.75), random:NextNumber(-1, 1)) * BUILDING_ANIMATION_POSITION_OFFSET_AMOUNT
+		local rotationOffset = CFrame.Angles(random:NextNumber(-math.pi, math.pi), random:NextNumber(-math.pi, math.pi), random:NextNumber(-math.pi, math.pi))
+		part.CFrame *= CFrame.new(positionOffset) * rotationOffset
+	end
+
+	--Tween them back to their original state, one at a time
+	local lastTween --Return this so the caller can do animateBuilding(...):Wait() to wait for the animation to complete
+
+	for _, part in pairs(parts) do
+		local tween = tweenService:Create(part, tweenInfo, originalProperties[part])
+		lastTween = tween
+
+		tween.Completed:Connect(function(playbackState)
+			--Sometimes Tweens stop before reaching their goal properly.
+			--  Make sure each Part is exactly how it was before.
+			part.Transparency = originalProperties[part].Transparency
+			part.CFrame = originalProperties[part].CFrame
+		end)
+
+		tween:Play()
+
+		wait(BUILDING_ANIMATION_PART_DELAY)
+	end
+
+	return lastTween.Completed
+end
+
+--Play sounds
+function playSound(object, soundID)
+	if object:FindFirstChild("Sound") then
+		return
+			else
+		local sound = Instance.new("Sound", object)
+		sound.SoundId = soundID
+		sound:Play()
+		sound.Ended:Wait()
+		sound:Destroy()
+	end
+end
+
+--claim door
+mainItems.OwnerDoor.Door.Touched:Connect(function(hit)
+	if values.OwnerValue.Value == nil then
+		local player = game.Players:GetPlayerFromCharacter(hit.Parent)
+		if player then
+			if player:FindFirstChild("HasTycoon").Value == false then
+				values.OwnerValue.Value = player
+				mainItems.OwnerDoor.Title.SurfaceGui.TextLabel.Text = tostring(values.OwnerValue.Value).."'s Tycoon"
+				mainItems.OwnerDoor.Title.SurfaceGui.TextLabel.TextColor3 = Color3.fromRGB(69, 119, 150)
+				mainItems.OwnerDoor.Door.Color = Color3.fromRGB(103, 145, 200)
+				mainItems.OwnerDoor.Door.Material = Enum.Material.Neon
+				playSound(mainItems.OwnerDoor, audio.OwnerSound.SoundId)
+			end
+		end
+	end
+end)
+
+--Buy Buttons
+if buttons then
+	for i, v in pairs(buttons:GetChildren()) do
+		spawn(function()
+			if v:FindFirstChild("Button") then
+				
+				local newObject = purchasedItems:FindFirstChild(v.Object.Value)
+				if newObject ~= nil then
+					objects[newObject.Name] = newObject:Clone()
+					newObject:Destroy()
+					else
+					v:Destroy()
+				end
+					
+					if v:FindFirstChild("Dependency") then
+						v.Button.Transparency = 1
+						v.Button.CanCollide = false
+						v.Button.BillboardGui.Enabled = false
+						coroutine.resume(coroutine.create(function()
+							if purchasedItems:WaitForChild(v.Dependency.Value) then
+								v.Button.Transparency = 0
+								v.Button.CanCollide = true
+							v.Button.BillboardGui.Enabled = true
+							end
+						end))
+					end
+					
+					v.Button.Touched:Connect(function(hit)
+						local player = game.Players:GetPlayerFromCharacter(hit.Parent)
+						if player then
+							if values.OwnerValue.Value == player then
+							if v.Button.CanCollide == true then
+								if v:FindFirstChild("GamepassID") and v.GamepassID.Value >= 1 then
+									if MarketplaceService:UserOwnsGamePassAsync(player.UserId, v.GamepassID.Value) then
+										objects[v.Object.Value].Parent = purchasedItems
+										playSound(v, audio.buttonSound.SoundId)
+										v:Destroy()
+									else
+										MarketplaceService:PromptGamePassPurchase(player.UserId, v.GamepassID.Value)
+									end
+								elseif player:FindFirstChild("leaderstats").Cash.Value >= v.Price.Value then
+										player.leaderstats.Cash.Value -= v.Price.Value
+										objects[v.Object.Value].Parent = purchasedItems
+										playSound(v, audio.buttonSound.SoundId)
+										v:Destroy()
+								else
+									playSound(v, audio.error.SoundId)
+								end
+								end
+							end
+						end
+					end)
+			end
+			purchasedItems.ChildAdded:Connect(function(add)
+				animateBuildingIn(purchasedItems:FindFirstChild(v.Object.Value), TweenInfo.new(1, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out)) :Wait()
+			end)
+		end)
+	end
+end
+
+mainItems.CashCollector.Button.Touched:Connect(function(hit)
+	local player = game.Players:GetPlayerFromCharacter(hit.Parent)
+	if player ~= nil then
+		if values.OwnerValue.Value == player then
+			if player.Character.Humanoid.Health > 0 then
+				if debounce == false then
+					if MarketplaceService:UserOwnsGamePassAsync(player.UserId, 664708496) then
+						debounce = true
+						mainItems.CashCollector.Button.BrickColor = BrickColor.new("Really red")
+						player.leaderstats.Cash.Value = player.leaderstats.Cash.Value + values.MoneyValue.Value * 2
+						values.MoneyValue.Value = 0
+						playSound(mainItems.CashCollector, audio.Money.SoundId)
+						task.wait(1)
+						mainItems.CashCollector.Button.BrickColor = BrickColor.new("Lime green")
+						debounce = false
+					else
+						debounce = true
+						mainItems.CashCollector.Button.BrickColor = BrickColor.new("Really red")
+						player.leaderstats.Cash.Value = player.leaderstats.Cash.Value + values.MoneyValue.Value
+						values.MoneyValue.Value = 0
+						playSound(mainItems.CashCollector, audio.Money.SoundId)
+						task.wait(1)
+						mainItems.CashCollector.Button.BrickColor = BrickColor.new("Lime green")
+						debounce = false
+					end
+				end
+			end
+		end
+	end
+end)
